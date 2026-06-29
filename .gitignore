@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+benchmark.jsonl
+benchmark.json
+analysis.json
+paper-report.json
+audit-report.json
+
