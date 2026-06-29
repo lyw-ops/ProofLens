@@ -20,7 +20,19 @@ class SemanticExtractorTests(unittest.TestCase):
         self.assertIsNotNone(analysis.semantic)
         self.assertEqual(analysis.semantic.status, "ok")
         self.assertEqual(len(analysis.semantic.declarations), 2)
+        semantic_final = {
+            declaration.name: declaration
+            for declaration in analysis.semantic.declarations
+        }["Demo.final"]
+        self.assertEqual(semantic_final.file, "Main.lean")
+        self.assertEqual(semantic_final.line, 8)
+        self.assertEqual(semantic_final.column, 1)
+        self.assertEqual(semantic_final.end_line, 11)
+        self.assertEqual(semantic_final.end_column, 9)
+        self.assertEqual(semantic_final.docstring, "Final theorem.")
+        self.assertEqual(semantic_final.attributes, ["simp"])
         declaration = analysis.declaration_map["Demo.final"]
+        self.assertEqual(declaration.canonical_name, "Demo.final")
         self.assertEqual(declaration.semantic_kind, "theorem")
         self.assertEqual(declaration.semantic_type, "forall (n : Nat), n = n")
         self.assertEqual(declaration.semantic_dependencies, ["Demo.ok"])
@@ -57,6 +69,8 @@ namespace Demo
 theorem ok (n : Nat) : n = n := by
   rfl
 
+/-- Final theorem. -/
+@[simp]
 theorem final (n : Nat) : n = n := by
   exact ok n
 

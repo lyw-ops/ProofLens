@@ -31,6 +31,7 @@ DECLARATION_RE = re.compile(
 IMPORT_RE = re.compile(r"^\s*import\s+(.+?)\s*$")
 NAMESPACE_RE = re.compile(r"^\s*namespace\s+([A-Za-z0-9_'.]+)\s*$")
 SECTION_RE = re.compile(r"^\s*section(?:\s+[A-Za-z0-9_'.]+)?\s*$")
+MUTUAL_RE = re.compile(r"^\s*mutual\s*$")
 END_RE = re.compile(r"^\s*end(?:\s+([A-Za-z0-9_'.]+))?\s*$")
 ATTRIBUTE_RE = re.compile(r"^\s*@\[(.+)\]\s*$")
 
@@ -137,6 +138,13 @@ def _find_declarations(
             line_index += 1
             continue
 
+        if MUTUAL_RE.match(line):
+            scope_stack.append(("mutual", None))
+            pending_docstring = None
+            pending_attributes = []
+            line_index += 1
+            continue
+
         end_match = END_RE.match(line)
         if end_match:
             _pop_scope(scope_stack, namespace_stack, end_match.group(1))
@@ -159,7 +167,9 @@ def _find_declarations(
                     short_name=short_name,
                     file=_relative_path(file_path, root_path),
                     line=line_index + 1,
+                    column=_first_nonspace_column(line),
                     end_line=line_index + 1,
+                    end_column=len(line) + 1,
                     statement="",
                     docstring=pending_docstring,
                     attributes=pending_attributes,
@@ -265,6 +275,7 @@ def _attach_source_and_statements(
         end = max(start, end)
         source_lines = lines[start : end + 1]
         declaration.end_line = end + 1
+        declaration.end_column = len(lines[end]) + 1 if 0 <= end < len(lines) else 1
         declaration.source = "\n".join(source_lines).rstrip()
         declaration.statement = extract_statement(declaration.source)
         formal_type = decompose_formal_type(declaration.statement)
@@ -317,26 +328,28 @@ def extract_proof_steps(
         line_without_comment = _remove_line_comment(raw_line)
         if _is_proof_terminator(line_without_comment):
             break
-        step_text = _normalize_tactic_line(line_without_comment)
-        if not step_text:
+        normalized = _normalize_tactic_line(line_without_comment)
+        if not normalized:
             continue
-        if step_text in {"by", "where"}:
-            continue
-        if step_text.startswith(("case ", "| ")):
-            continue
-        tactic = _tactic_head(step_text)
-        if not tactic:
-            continue
-        steps.append(
-            ProofStep(
-                index=len(steps) + 1,
-                tactic=tactic,
-                text=step_text,
-                line=start_line + relative_index,
-                column=_first_nonspace_column(raw_line),
-                end_line=start_line + relative_index,
+        for step_text in _tactic_segments(normalized):
+            if not step_text or step_text in {"by", "where"}:
+                continue
+            if step_text.startswith(("case ", "| ")) and "=>" not in step_text:
+                continue
+            step_text = _inline_branch_tactic(step_text)
+            tactic = _tactic_head(step_text)
+            if not tactic:
+                continue
+            steps.append(
+                ProofStep(
+                    index=len(steps) + 1,
+                    tactic=tactic,
+                    text=step_text,
+                    line=start_line + relative_index,
+                    column=_tactic_column(raw_line, step_text),
+                    end_line=start_line + relative_index,
+                )
             )
-        )
     return steps
 
 
@@ -362,9 +375,69 @@ def _normalize_tactic_line(line: str) -> str:
     return stripped
 
 
+def _tactic_segments(line: str) -> list[str]:
+    segments: list[str] = []
+    start = 0
+    index = 0
+    depth = 0
+    in_string = False
+    escaped = False
+    while index < len(line):
+        char = line[index]
+        if in_string:
+            if char == '"' and not escaped:
+                in_string = False
+            escaped = char == "\\" and not escaped
+            if char != "\\":
+                escaped = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            escaped = False
+            index += 1
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}" and depth:
+            depth -= 1
+        if depth == 0 and line.startswith("<;>", index):
+            _push_segment(segments, line[start:index])
+            index += 3
+            start = index
+            continue
+        if depth == 0 and char == ";":
+            _push_segment(segments, line[start:index])
+            index += 1
+            start = index
+            continue
+        index += 1
+    _push_segment(segments, line[start:])
+    return segments
+
+
+def _push_segment(segments: list[str], segment: str) -> None:
+    cleaned = segment.strip()
+    if cleaned:
+        segments.append(cleaned)
+
+
+def _inline_branch_tactic(step_text: str) -> str:
+    if step_text.startswith(("case ", "| ")) and "=>" in step_text:
+        return step_text.split("=>", 1)[1].strip()
+    return step_text
+
+
 def _is_proof_terminator(line: str) -> bool:
     stripped = line.strip()
-    return bool(END_RE.match(stripped) or NAMESPACE_RE.match(stripped) or SECTION_RE.match(stripped))
+    return bool(
+        stripped == "where"
+        or stripped.startswith("where ")
+        or END_RE.match(stripped)
+        or NAMESPACE_RE.match(stripped)
+        or SECTION_RE.match(stripped)
+        or MUTUAL_RE.match(stripped)
+    )
 
 
 def _tactic_head(step_text: str) -> str:
@@ -377,6 +450,21 @@ def _first_nonspace_column(line: str) -> int:
         if not char.isspace():
             return index + 1
     return 1
+
+
+def _tactic_column(line: str, step_text: str) -> int:
+    if step_text:
+        index = line.find(step_text)
+        if index >= 0:
+            return index + 1
+    index = 0
+    while index < len(line) and line[index].isspace():
+        index += 1
+    while index < len(line) and line[index] in {"·", "*", "-"}:
+        index += 1
+        while index < len(line) and line[index].isspace():
+            index += 1
+    return index + 1 if index < len(line) else _first_nonspace_column(line)
 
 
 def _statement_seems_complete(lines: list[str]) -> bool:

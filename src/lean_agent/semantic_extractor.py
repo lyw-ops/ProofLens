@@ -98,16 +98,24 @@ def attach_semantics(
     report: SemanticExtractionReport,
 ) -> None:
     semantic_by_name = {
-        declaration.name: declaration
+        _normalize_name(declaration.name): declaration
         for declaration in report.declarations
     }
     for declaration in declarations:
-        semantic = semantic_by_name.get(declaration.name)
+        semantic = semantic_by_name.get(_normalize_name(declaration.name))
         if semantic is None:
             continue
+        declaration.canonical_name = semantic.name
         declaration.semantic_kind = semantic.kind
         declaration.semantic_type = semantic.type
         declaration.semantic_dependencies = semantic.dependencies
+        semantic.file = declaration.file
+        semantic.line = declaration.line
+        semantic.column = declaration.column
+        semantic.end_line = declaration.end_line
+        semantic.end_column = declaration.end_column
+        semantic.docstring = declaration.docstring
+        semantic.attributes = list(declaration.attributes)
         formal_type = decompose_formal_type(semantic.type)
         declaration.formal_parameters = formal_type.parameters
         declaration.formal_conclusion = formal_type.conclusion
@@ -233,7 +241,11 @@ def _parse_declarations(stdout: str) -> list[SemanticDeclaration]:
 
 
 def _parse_dependencies(text: str) -> list[str]:
-    return sorted({item.strip() for item in text.split(",") if item.strip()})
+    return sorted({_normalize_name(item.strip()) for item in text.split(",") if item.strip()})
+
+
+def _normalize_name(name: str) -> str:
+    return name.removeprefix("_root_.")
 
 
 def _run(command: list[str], root: Path, timeout: int) -> subprocess.CompletedProcess[str]:

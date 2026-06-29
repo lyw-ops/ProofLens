@@ -32,8 +32,11 @@ end Demo
         self.assertEqual(item["parent_name"], "Demo.final")
         self.assertEqual(item["tactic"], "rfl")
         self.assertEqual(item["tactic_text"], "rfl")
+        self.assertEqual(item["schema_version"], "prooflens.ai4math.v1")
         self.assertIsNone(item["before_state"])
         self.assertIsNone(item["after_state"])
+        self.assertEqual(item["field_status"]["before_state"], "missing")
+        self.assertEqual(item["field_status"]["after_state"], "missing")
 
     def test_all_level_includes_theorem_and_tactic_items(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -75,7 +78,15 @@ end Demo
             analysis = scan_project(root)
 
         item = build_benchmark_items(analysis)[0]
+        self.assertEqual(item["schema_version"], "prooflens.ai4math.v1")
+        self.assertEqual(item["schema_stability"], "experimental")
+        self.assertIsNone(item["missing_value"])
+        self.assertEqual(item["line"], 3)
+        self.assertEqual(item["column"], 1)
+        self.assertEqual(item["end_line"], 6)
+        self.assertEqual(item["end_column"], 9)
         self.assertEqual(item["conclusion"], "n = n")
+        self.assertEqual(item["field_status"]["conclusion"], "available")
         self.assertEqual(item["assumptions"][0]["names"], ["h"])
         self.assertEqual(item["assumptions"][0]["type"], "n = n")
 

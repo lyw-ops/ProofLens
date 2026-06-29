@@ -27,3 +27,47 @@ jobs:
 
       - name: Compile sources
         run: PYTHONPATH=src python -m compileall src tests
+
+      - name: Install Lean toolchain
+        if: matrix.python-version == '3.12'
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain leanprover/lean4:v4.31.0
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Lean/Lake semantic and proof-state smoke
+        if: matrix.python-version == '3.12'
+        run: |
+          mkdir -p /tmp/prooflens-ci-smoke
+          cd /tmp/prooflens-ci-smoke
+          cat > lean-toolchain <<'EOF'
+          leanprover/lean4:v4.31.0
+          EOF
+          cat > lakefile.lean <<'EOF'
+          import Lake
+          open Lake DSL
+
+          package prooflens_ci where
+
+          lean_lib Demo where
+          EOF
+          cat > Demo.lean <<'EOF'
+          namespace Demo
+
+          theorem ok (n : Nat) : n = n := by
+            rfl
+
+          end Demo
+          EOF
+          PYTHONPATH="$GITHUB_WORKSPACE/src" python -m prooflens scan . --semantic --proof-states --format json --out scan.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("scan.json").read_text())
+          decl = payload["declarations"][0]
+          assert decl["semantic_type"] == "forall (n : Nat), n = n", decl
+          assert payload["proof_states"]["extraction_mode"] == "lean_structured_json", payload["proof_states"]
+          assert len(payload["proof_states"]["records"]) == 1, payload["proof_states"]
+          assert decl["proof_steps"][0]["before_state"], decl
+          assert decl["proof_steps"][0]["after_state"] == "no goals", decl
+          PY

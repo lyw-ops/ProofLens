@@ -47,6 +47,76 @@ end Demo
             self.assertEqual(payload[0]["kind"], "tactic")
             self.assertEqual(payload[0]["tactic"], "trivial")
 
+    def test_benchmark_can_export_proof_states_when_requested(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+theorem ok (n : Nat) : n = n := by
+  rfl
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "lakefile.lean").write_text("import Lake\n", encoding="utf-8")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            lake = bin_dir / "lake"
+            lake.write_text(
+                """#!/usr/bin/env python3
+import sys
+
+trace = '''[Elab.info]
+  \\u2022 [Command] @ \\u27e82, 0\\u27e9-\\u27e83, 5\\u27e9 @ Lean.Elab.Command.elabDeclaration
+    \\u2022 [CustomInfo(Lean.Elab.Term.AsyncBodyInfo)]
+      \\u2022 [CustomInfo(Lean.Elab.Term.BodyInfo)]
+        \\u2022 [Tactic] @ \\u27e83, 2\\u27e9-\\u27e83, 5\\u27e9 @ Lean.Parser.Tactic._aux_Init_Tactics___macroRules_Lean_Parser_Tactic_tacticRfl_2
+          (Tactic.tacticRfl "rfl")
+          before
+          n : Nat
+          |- n = n
+          after no goals
+'''
+
+if sys.argv[1:3] == ["env", "lean"] and "-Dtrace.Elab.info=true" in sys.argv:
+    print(trace)
+    sys.exit(0)
+sys.exit(2)
+""",
+                encoding="utf-8",
+            )
+            lake.chmod(0o755)
+            output = root / "benchmark.json"
+            env = os.environ.copy()
+            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "prooflens",
+                    "benchmark",
+                    str(root),
+                    "--level",
+                    "tactic",
+                    "--proof-states",
+                    "--format",
+                    "json",
+                    "--out",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                timeout=10,
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(payload[0]["before_state"], "n : Nat\n|- n = n")
+            self.assertEqual(payload[0]["after_state"], "no goals")
+
     def test_check_paper_semantic_statement_alignment(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

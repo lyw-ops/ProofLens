@@ -8,6 +8,8 @@ from lean_agent.models import LeanDeclaration, ProjectAnalysis
 
 
 BENCHMARK_KINDS = {"theorem", "lemma", "def", "abbrev", "structure", "class", "inductive"}
+BENCHMARK_SCHEMA_VERSION = "prooflens.ai4math.v1"
+BENCHMARK_SCHEMA_STABILITY = "experimental"
 
 
 def build_benchmark_items(
@@ -55,13 +57,18 @@ def _item_for_declaration(
         }
     )
     lean_statement = declaration.semantic_type or declaration.statement
-    return {
+    return _with_schema(
+        {
         "id": _stable_id(declaration),
         "name": declaration.name,
         "kind": declaration.kind,
+        "canonical_name": declaration.canonical_name or declaration.name,
         "semantic_kind": declaration.semantic_kind,
         "file": declaration.file,
         "line": declaration.line,
+        "column": declaration.column,
+        "end_line": declaration.end_line,
+        "end_column": declaration.end_column,
         "natural_language_description": _description(declaration),
         "lean_statement": lean_statement,
         "formal_parameters": [parameter.to_dict() for parameter in declaration.formal_parameters],
@@ -82,7 +89,13 @@ def _item_for_declaration(
             "command": f"lake env lean {declaration.file}",
             "note": "Run from the Lean project root. Use `lake build` for whole-project verification.",
         },
-    }
+        },
+        optional_fields=[
+            "semantic_kind",
+            "conclusion",
+            "semantic_dependencies",
+        ],
+    )
 
 
 def _tactic_items_for_declaration(
@@ -96,11 +109,13 @@ def _tactic_items_for_declaration(
     items: list[dict[str, Any]] = []
     for step in declaration.proof_steps:
         items.append(
-            {
+            _with_schema(
+                {
                 "id": f"{_stable_id(declaration)}__step_{step.index}",
                 "name": f"{declaration.name}::step_{step.index}",
                 "kind": "tactic",
                 "parent_name": declaration.name,
+                "parent_canonical_name": declaration.canonical_name or declaration.name,
                 "parent_kind": declaration.kind,
                 "file": declaration.file,
                 "line": step.line,
@@ -121,9 +136,37 @@ def _tactic_items_for_declaration(
                     "note": "Run from the Lean project root. Tactic-state fields are populated when proof-state extraction is available.",
                 },
                 "difficulty": _tactic_difficulty(step.text),
-            }
+                },
+                optional_fields=[
+                    "conclusion",
+                    "before_state",
+                    "after_state",
+                ],
+            )
         )
     return items
+
+
+def _with_schema(item: dict[str, Any], optional_fields: list[str]) -> dict[str, Any]:
+    field_status = {
+        field: _field_status(item.get(field))
+        for field in optional_fields
+    }
+    return {
+        "schema_version": BENCHMARK_SCHEMA_VERSION,
+        "schema_stability": BENCHMARK_SCHEMA_STABILITY,
+        "missing_value": None,
+        "field_status": field_status,
+        **item,
+    }
+
+
+def _field_status(value: Any) -> str:
+    if value is None:
+        return "missing"
+    if isinstance(value, list) and not value:
+        return "missing"
+    return "available"
 
 
 def _stable_id(declaration: LeanDeclaration) -> str:

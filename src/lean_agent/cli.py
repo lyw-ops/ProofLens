@@ -38,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--semantic", action="store_true", help="Run the optional Lean/Lake semantic extractor.")
     scan.add_argument("--semantic-build", action="store_true", help="Run `lake build` before semantic extraction.")
     scan.add_argument("--semantic-timeout", type=int, default=120, help="Semantic extraction timeout in seconds.")
+    scan.add_argument("--proof-states", action="store_true", help="Extract tactic before/after states with Lean.")
+    scan.add_argument("--proof-state-timeout", type=int, default=120, help="Proof-state extraction timeout in seconds.")
     scan.add_argument("--out", help="Write output to a file instead of stdout.")
     scan.set_defaults(func=cmd_scan)
 
@@ -66,6 +68,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--semantic", action="store_true", help="Run the optional Lean/Lake semantic extractor.")
     benchmark.add_argument("--semantic-build", action="store_true", help="Run `lake build` before semantic extraction.")
     benchmark.add_argument("--semantic-timeout", type=int, default=120, help="Semantic extraction timeout in seconds.")
+    benchmark.add_argument("--proof-states", action="store_true", help="Extract tactic before/after states with Lean.")
+    benchmark.add_argument("--proof-state-timeout", type=int, default=120, help="Proof-state extraction timeout in seconds.")
     benchmark.set_defaults(func=cmd_benchmark)
 
     audit = subparsers.add_parser("audit", help="Audit reproducibility metadata and optionally run lake build.")
@@ -92,6 +96,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         semantic=args.semantic or args.semantic_build,
         semantic_build=args.semantic_build,
         semantic_timeout=args.semantic_timeout,
+        proof_states=args.proof_states,
+        proof_state_timeout=args.proof_state_timeout,
     )
     if args.format == "json":
         output = project_to_json(analysis, include_source=args.include_source)
@@ -127,6 +133,8 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
         semantic=args.semantic or args.semantic_build,
         semantic_build=args.semantic_build,
         semantic_timeout=args.semantic_timeout,
+        proof_states=args.proof_states,
+        proof_state_timeout=args.proof_state_timeout,
     )
     write_benchmark(analysis, args.out, output_format=args.format, level=args.level)
     count = len(build_benchmark_items(analysis, level=args.level))

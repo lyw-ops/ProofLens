@@ -155,6 +155,167 @@ end Demo
         self.assertEqual([step.tactic for step in steps], ["constructor", "trivial", "exact"])
         self.assertEqual([step.text for step in steps], ["constructor", "trivial", "exact True.intro"])
         self.assertEqual([step.line for step in steps], [4, 5, 6])
+        self.assertEqual([step.column for step in steps], [3, 5, 5])
+
+    def test_inline_by_step_uses_tactic_column(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                "theorem ok : True := by trivial\n",
+                encoding="utf-8",
+            )
+
+            analysis = scan_project(root)
+
+        step = analysis.declaration_map["ok"].proof_steps[0]
+        self.assertEqual(step.text, "trivial")
+        self.assertEqual(step.line, 1)
+        self.assertEqual(step.column, 25)
+
+    def test_extracts_multiple_tactics_on_one_line(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+theorem ok (h : True) : True := by
+  intro
+  trivial; exact h
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            analysis = scan_project(root)
+
+        steps = analysis.declaration_map["ok"].proof_steps
+        self.assertEqual([step.text for step in steps], ["intro", "trivial", "exact h"])
+        self.assertEqual([step.line for step in steps], [2, 3, 3])
+
+    def test_extracts_tactics_split_by_all_goals_separator(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+theorem ok : True ∧ True := by
+  constructor <;> trivial
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            analysis = scan_project(root)
+
+        steps = analysis.declaration_map["ok"].proof_steps
+        self.assertEqual([step.text for step in steps], ["constructor", "trivial"])
+
+    def test_extracts_inline_case_branch_tactic(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+theorem ok : True := by
+  case h => trivial
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            analysis = scan_project(root)
+
+        steps = analysis.declaration_map["ok"].proof_steps
+        self.assertEqual([step.text for step in steps], ["trivial"])
+
+    def test_keeps_calc_and_by_cases_as_proof_steps(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+theorem ok (p : Prop) [Decidable p] : True := by
+  by_cases h : p
+  · trivial
+  · calc
+      True := by trivial
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            analysis = scan_project(root)
+
+        steps = analysis.declaration_map["ok"].proof_steps
+        self.assertEqual(
+            [step.tactic for step in steps],
+            ["by_cases", "trivial", "calc", "trivial"],
+        )
+
+    def test_mutual_block_does_not_pop_namespace(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+
+mutual
+theorem left : True := by
+  trivial
+theorem right : True := by
+  exact left
+end
+
+theorem after : True := by
+  exact right
+
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            analysis = scan_project(root)
+
+        self.assertIn("Demo.left", analysis.declaration_map)
+        self.assertIn("Demo.right", analysis.declaration_map)
+        self.assertIn("Demo.after", analysis.declaration_map)
+        self.assertIn("Demo.right", analysis.declaration_map["Demo.after"].dependencies)
+
+    def test_where_helper_proof_does_not_leak_into_parent_steps(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+theorem ok : True := by
+  exact helper
+where
+  helper : True := by
+    trivial
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            analysis = scan_project(root)
+
+        steps = analysis.declaration_map["ok"].proof_steps
+        self.assertEqual([step.text for step in steps], ["exact helper"])
+
+    def test_extracts_match_branch_tactics(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+theorem ok (b : Bool) : True := by
+  match b with
+  | true => trivial
+  | false => trivial
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            analysis = scan_project(root)
+
+        steps = analysis.declaration_map["ok"].proof_steps
+        self.assertEqual([step.text for step in steps], ["match b with", "trivial", "trivial"])
 
 
 if __name__ == "__main__":

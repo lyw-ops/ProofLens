@@ -6,6 +6,7 @@ from pathlib import Path
 from lean_agent.declaration_index import DeclarationIndex
 from lean_agent.lean_parser import parse_lean_file, tokenize_lean_source
 from lean_agent.models import LeanDeclaration, LeanFileAnalysis, ProjectAnalysis
+from lean_agent.proof_state_extractor import attach_proof_states, extract_proof_states
 from lean_agent.semantic_extractor import attach_semantics, extract_semantics
 
 
@@ -57,6 +58,8 @@ def scan_project(
     semantic: bool = False,
     semantic_build: bool = False,
     semantic_timeout: int = 120,
+    proof_states: bool = False,
+    proof_state_timeout: int = 120,
 ) -> ProjectAnalysis:
     root_path = Path(root).resolve()
     scan_root = root_path.parent if root_path.is_file() else root_path
@@ -85,6 +88,14 @@ def scan_project(
             timeout=semantic_timeout,
         )
         attach_semantics(declarations, analysis.semantic)
+    if proof_states:
+        analysis.proof_states = extract_proof_states(
+            scan_root,
+            file_analyses,
+            declarations,
+            timeout=proof_state_timeout,
+        )
+        attach_proof_states(declarations, analysis.proof_states)
     return analysis
 
 
@@ -110,6 +121,9 @@ def project_to_markdown(analysis: ProjectAnalysis) -> str:
     if analysis.semantic:
         lines.append(f"- Semantic extraction: {analysis.semantic.status}")
         lines.append(f"- Semantic declarations: {len(analysis.semantic.declarations)}")
+    if analysis.proof_states:
+        lines.append(f"- Proof-state extraction: {analysis.proof_states.status}")
+        lines.append(f"- Proof-state records: {len(analysis.proof_states.records)}")
     lines.append("")
 
     if analysis.files:

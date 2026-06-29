@@ -37,7 +37,9 @@ def _declaration(name: str, short_name: str, file: str, line: int) -> LeanDeclar
         short_name=short_name,
         file=file,
         line=line,
+        column=1,
         end_line=line,
+        end_column=1,
         statement=f"theorem {short_name} : True",
     )
 

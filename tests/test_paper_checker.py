@@ -163,6 +163,54 @@ end Demo
         messages = [finding.message for finding in report.findings]
         self.assertTrue(any("conclusion" in message for message in messages))
 
+    def test_resolves_paper_aliases_in_references_and_statements(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+theorem ok (n : Nat) : n = n := by
+  rfl
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            paper.write_text(
+                r"""
+\leanalias{Main theorem}{Demo.ok}
+We cite \leantheorem{Main theorem}.
+\leanstatement{Main theorem}{theorem ok (n : Nat) : n = n}
+""".strip(),
+                encoding="utf-8",
+            )
+            analysis = scan_project(root)
+            report = check_paper(analysis, paper)
+
+        self.assertEqual(report.references_checked, 2)
+        self.assertEqual(report.statements_checked, 1)
+        self.assertEqual(report.findings, [])
+
+    def test_missing_reference_location_includes_nearest_section(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                "theorem ok : True := by\n  trivial\n",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            paper.write_text(
+                r"\section{Formalization}\lean{missing}",
+                encoding="utf-8",
+            )
+            analysis = scan_project(root)
+            report = check_paper(analysis, paper)
+
+        self.assertEqual(report.references_checked, 1)
+        self.assertIn("section `Formalization`", report.findings[0].location)
+        self.assertIn("\\leanalias", report.findings[0].suggestion)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,7 @@ from lean_agent.models import Finding, ProjectAnalysis
 
 
 LEAN_COMMAND_RE = re.compile(
-    r"\\(?P<command>lean|leanref|leanname|leanstatement|uses)\s*\{(?P<name>[^}]+)\}"
+    r"\\(?P<command>lean|leanref|leanname|leanstatement|leanthm|leantheorem|leanlemma|uses)\s*\{(?P<name>[^}]+)\}"
 )
 GITHUB_LINK_RE = re.compile(
     r"https://github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/"
@@ -28,6 +28,7 @@ LEAN_BLOCK_RE = re.compile(
     flags=re.DOTALL | re.IGNORECASE,
 )
 LABEL_RE = re.compile(r"\\label\{(?P<label>[^}]+)\}")
+SECTION_RE = re.compile(r"\\(?P<level>part|chapter|section|subsection|subsubsection)\*?\{(?P<title>[^}]+)\}")
 
 
 @dataclass
@@ -65,9 +66,10 @@ def check_paper(
     path = Path(paper_path)
     text = path.read_text(encoding="utf-8")
     report = PaperCheckReport(paper=str(path), lean_root=analysis.root)
-    _check_lean_references(analysis, text, report)
-    _check_lean_statement_commands(analysis, text, report)
-    _check_formal_part_commands(analysis, text, report)
+    aliases = _lean_aliases(text)
+    _check_lean_references(analysis, text, report, aliases)
+    _check_lean_statement_commands(analysis, text, report, aliases)
+    _check_formal_part_commands(analysis, text, report, aliases)
     _check_github_links(analysis, text, report)
     _check_lean_code_blocks(analysis, text, report)
     return report
@@ -107,18 +109,20 @@ def _check_lean_references(
     analysis: ProjectAnalysis,
     text: str,
     report: PaperCheckReport,
+    aliases: dict[str, str],
 ) -> None:
     for match in LEAN_COMMAND_RE.finditer(text):
         names = [name.strip() for name in re.split(r"[,;]", match.group("name")) if name.strip()]
         for name in names:
             report.references_checked += 1
-            if resolve_symbol(analysis, name) is None:
+            resolved_name = aliases.get(name, name)
+            if resolve_symbol(analysis, resolved_name) is None:
                 report.findings.append(
                     Finding(
                         severity="error",
                         message=f"Lean reference `{name}` from `\\{match.group('command')}` was not found in scanned declarations.",
                         location=_line_col(text, match.start()),
-                        suggestion="Check theorem spelling, namespace qualification, or whether the source file is included in the Lean root.",
+                        suggestion=_missing_reference_suggestion(name, resolved_name),
                     )
                 )
 
@@ -127,10 +131,11 @@ def _check_lean_statement_commands(
     analysis: ProjectAnalysis,
     text: str,
     report: PaperCheckReport,
+    aliases: dict[str, str],
 ) -> None:
     for symbol, paper_statement, offset in _iter_latex_command_args(text, "leanstatement", arity=2):
         report.statements_checked += 1
-        declaration = resolve_symbol(analysis, symbol)
+        declaration = resolve_symbol(analysis, aliases.get(symbol, symbol))
         if declaration is None:
             continue
         if _statement_matches_declaration(paper_statement, declaration):
@@ -150,10 +155,11 @@ def _check_formal_part_commands(
     analysis: ProjectAnalysis,
     text: str,
     report: PaperCheckReport,
+    aliases: dict[str, str],
 ) -> None:
     for symbol, paper_conclusion, offset in _iter_latex_command_args(text, "leanconclusion", arity=2):
         report.formal_parts_checked += 1
-        declaration = resolve_symbol(analysis, symbol)
+        declaration = resolve_symbol(analysis, aliases.get(symbol, symbol))
         if declaration is None:
             continue
         expected = declaration.formal_conclusion or _type_part_from_statement(declaration.statement) or ""
@@ -169,7 +175,7 @@ def _check_formal_part_commands(
         )
     for symbol, paper_assumptions, offset in _iter_latex_command_args(text, "leanassumptions", arity=2):
         report.formal_parts_checked += 1
-        declaration = resolve_symbol(analysis, symbol)
+        declaration = resolve_symbol(analysis, aliases.get(symbol, symbol))
         if declaration is None:
             continue
         expected = "; ".join(
@@ -367,6 +373,27 @@ def _shorten(text: str, limit: int = 180) -> str:
     return normalized[: limit - 3].rstrip() + "..."
 
 
+def _lean_aliases(text: str) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for alias, target, _offset in _iter_latex_command_args(text, "leanalias", arity=2):
+        alias = alias.strip()
+        target = target.strip()
+        if alias and target:
+            aliases[alias] = target
+    for alias, target, _offset in _iter_latex_command_args(text, "leantheoremalias", arity=2):
+        alias = alias.strip()
+        target = target.strip()
+        if alias and target:
+            aliases[alias] = target
+    return aliases
+
+
+def _missing_reference_suggestion(name: str, resolved_name: str) -> str:
+    if name != resolved_name:
+        return f"Alias `{name}` points to `{resolved_name}`, but that Lean declaration was not found. Check the alias target or Lean root."
+    return "Check theorem spelling, namespace qualification, add a `\\leanalias{paper name}{Lean.Name}`, or verify that the source file is included in the Lean root."
+
+
 def _iter_latex_command_args(
     text: str,
     command: str,
@@ -449,4 +476,17 @@ def _line_col(text: str, offset: int) -> str:
     line = text.count("\n", 0, offset) + 1
     line_start = text.rfind("\n", 0, offset)
     column = offset + 1 if line_start == -1 else offset - line_start
+    section = _section_at(text, offset)
+    if section:
+        return f"line {line}, column {column}, {section}"
     return f"line {line}, column {column}"
+
+
+def _section_at(text: str, offset: int) -> str | None:
+    current: tuple[str, str] | None = None
+    for match in SECTION_RE.finditer(text, 0, offset):
+        current = (match.group("level"), _normalized_statement(match.group("title")))
+    if current is None:
+        return None
+    level, title = current
+    return f"{level} `{title}`"
