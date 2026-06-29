@@ -1,6 +1,6 @@
-# Lean Formalization Assistant Agent
+# Prooflens
 
-`lean-agent` is a research-assistant prototype for Lean formalization projects. It helps researchers inspect Lean project structure, check consistency between papers and source code, generate theorem and lemma explanations, export AI4Math benchmark items, and run basic reproducibility audits.
+Prooflens is a research-assistant prototype for Lean formalization projects. It helps researchers inspect Lean project structure, check consistency between papers and source code, generate theorem and lemma explanations, export AI4Math benchmark items, and run basic reproducibility audits.
 
 This version is intentionally implemented with the Python standard library only. It does not require network access or external APIs, making it a runnable local baseline that can later be extended with LLMs, Lean LSP support, GitHub integration, or paper-writing workflows.
 
@@ -16,18 +16,18 @@ This version is intentionally implemented with the Python standard library only.
 ## Quick Start
 
 ```bash
-PYTHONPATH=src python3 -m lean_agent scan examples/sample_project
-PYTHONPATH=src python3 -m lean_agent explain examples/sample_project --symbol Sample.add_zero_twice
-PYTHONPATH=src python3 -m lean_agent check-paper --lean-root examples/sample_project --paper examples/sample_paper.tex
-PYTHONPATH=src python3 -m lean_agent benchmark examples/sample_project --out benchmark.jsonl
-PYTHONPATH=src python3 -m lean_agent audit examples/sample_project
+PYTHONPATH=src python3 -m prooflens scan examples/sample_project
+PYTHONPATH=src python3 -m prooflens explain examples/sample_project --symbol Sample.add_zero_twice
+PYTHONPATH=src python3 -m prooflens check-paper --lean-root examples/sample_project --paper examples/sample_paper.tex
+PYTHONPATH=src python3 -m prooflens benchmark examples/sample_project --out benchmark.jsonl
+PYTHONPATH=src python3 -m prooflens audit examples/sample_project
 ```
 
 Install it as a command-line tool:
 
 ```bash
 python3 -m pip install -e .
-lean-agent scan path/to/lean/project
+prooflens scan path/to/lean/project
 ```
 
 ## Commands
@@ -37,8 +37,8 @@ lean-agent scan path/to/lean/project
 Scan a Lean project and output a structural summary.
 
 ```bash
-lean-agent scan path/to/project --format markdown
-lean-agent scan path/to/project --format json --out analysis.json
+prooflens scan path/to/project --format markdown
+prooflens scan path/to/project --format json --out analysis.json
 ```
 
 ### `explain`
@@ -46,8 +46,8 @@ lean-agent scan path/to/project --format json --out analysis.json
 Generate a natural-language explanation for a theorem, lemma, or definition.
 
 ```bash
-lean-agent explain path/to/project --symbol MyProject.Main.final_theorem
-lean-agent explain path/to/project --symbol final_theorem --language en
+prooflens explain path/to/project --symbol MyProject.Main.final_theorem
+prooflens explain path/to/project --symbol final_theorem --language en
 ```
 
 ### `check-paper`
@@ -55,7 +55,7 @@ lean-agent explain path/to/project --symbol final_theorem --language en
 Check whether Lean references and GitHub links in a paper are consistent with the local Lean project.
 
 ```bash
-lean-agent check-paper --lean-root path/to/project --paper paper/main.tex
+prooflens check-paper --lean-root path/to/project --paper paper/main.tex
 ```
 
 It checks:
@@ -70,8 +70,8 @@ It checks:
 Export AI4Math benchmark items.
 
 ```bash
-lean-agent benchmark path/to/project --out benchmark.jsonl
-lean-agent benchmark path/to/project --format json --out benchmark.json
+prooflens benchmark path/to/project --out benchmark.jsonl
+prooflens benchmark path/to/project --format json --out benchmark.json
 ```
 
 Each item contains:
@@ -91,8 +91,8 @@ Each item contains:
 Check Lean project reproducibility.
 
 ```bash
-lean-agent audit path/to/project
-lean-agent audit path/to/project --run-build --timeout 120
+prooflens audit path/to/project
+prooflens audit path/to/project --run-build --timeout 120
 ```
 
 `--run-build` invokes `lake build`. If Lean or Lake is not available on the machine, the report records the error instead of crashing the CLI.

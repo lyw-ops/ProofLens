@@ -3,13 +3,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lean-formalization-agent"
+name = "prooflens"
 version = "0.1.0"
-description = "A Lean-aware research assistant for formalization projects, papers, and AI4Math benchmarks."
+description = "Prooflens is a Lean-aware research assistant for formalization projects, papers, and AI4Math benchmarks."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-  { name = "LeanAgent contributors" }
+  { name = "Prooflens contributors" }
 ]
 license = { text = "MIT" }
 keywords = ["lean", "formalization", "ai4math", "benchmark", "latex"]
@@ -24,8 +24,8 @@ classifiers = [
 dependencies = []
 
 [project.scripts]
+prooflens = "lean_agent.cli:main"
 lean-agent = "lean_agent.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

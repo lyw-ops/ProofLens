@@ -19,14 +19,14 @@ def main(argv: list[str] | None = None) -> int:
     except BrokenPipeError:
         return 1
     except Exception as exc:
-        print(f"lean-agent: error: {exc}", file=sys.stderr)
+        print(f"prooflens: error: {exc}", file=sys.stderr)
         return 2
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="lean-agent",
-        description="Lean-aware assistant for formalization projects, papers, and AI4Math benchmarks.",
+        prog="prooflens",
+        description="Prooflens: a Lean-aware assistant for formalization projects, papers, and AI4Math benchmarks.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -118,4 +118,3 @@ def _emit(output: str, output_path: str | None) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

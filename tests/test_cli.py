@@ -18,7 +18,7 @@ class CliTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "lean_agent",
+                    "prooflens",
                     "audit",
                     str(root),
                     "--format",
@@ -36,4 +36,3 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
