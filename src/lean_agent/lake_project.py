@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -86,23 +85,53 @@ def _dependencies_from_lakefile_lean(path: Path) -> list[LakeDependency]:
         return []
     text = path.read_text(encoding="utf-8", errors="replace")
     dependencies: list[LakeDependency] = []
-    require_re = re.compile(
-        r"require\s+(?P<name>[A-Za-z0-9_'.-]+)"
-        r"(?:\s+from\s+(?P<kind>git|Git|path|Path)\s+\"(?P<url>[^\"]+)\")?"
-        r"(?:\s*@\s+\"(?P<rev>[^\"]+)\")?",
-        flags=re.MULTILINE,
-    )
-    for match in require_re.finditer(text):
-        dependencies.append(
-            LakeDependency(
-                name=match.group("name"),
-                source="lakefile.lean",
-                kind=_normalize_kind(match.group("kind")),
-                url=match.group("url"),
-                input_rev=match.group("rev"),
-            )
-        )
+    for line in text.splitlines():
+        dependency = _parse_lakefile_lean_require(line)
+        if dependency:
+            dependencies.append(dependency)
     return dependencies
+
+
+def _parse_lakefile_lean_require(line: str) -> LakeDependency | None:
+    stripped = _strip_line_comment(line).strip()
+    index = 0
+    keyword, index = _read_word(stripped, index)
+    if keyword != "require":
+        return None
+    index = _skip_spaces(stripped, index)
+    name, index = _read_dependency_name(stripped, index)
+    if not name:
+        return None
+
+    kind: str | None = None
+    url: str | None = None
+    input_rev: str | None = None
+    while index < len(stripped):
+        index = _skip_spaces(stripped, index)
+        if index >= len(stripped):
+            break
+        if stripped[index] == "@":
+            index = _skip_spaces(stripped, index + 1)
+            input_rev, index = _read_quoted_string(stripped, index)
+            continue
+        word, next_index = _read_word(stripped, index)
+        if word == "from":
+            kind, next_index = _read_word(stripped, _skip_spaces(stripped, next_index))
+            kind = _normalize_kind(kind)
+            next_index = _skip_spaces(stripped, next_index)
+            if next_index < len(stripped) and stripped[next_index] == '"':
+                url, next_index = _read_quoted_string(stripped, next_index)
+            index = next_index
+            continue
+        index = next_index + 1 if next_index == index else next_index
+
+    return LakeDependency(
+        name=name,
+        source="lakefile.lean",
+        kind=kind,
+        url=url,
+        input_rev=input_rev,
+    )
 
 
 def _dependencies_from_lakefile_toml(path: Path) -> list[LakeDependency]:
@@ -147,8 +176,91 @@ def _toml_require_blocks(text: str) -> list[str]:
 
 
 def _toml_string(block: str, key: str) -> str | None:
-    match = re.search(rf"^\s*{re.escape(key)}\s*=\s*\"([^\"]+)\"", block, flags=re.MULTILINE)
-    return match.group(1) if match else None
+    for line in block.splitlines():
+        stripped = _strip_line_comment(line).strip()
+        if not stripped.startswith(key):
+            continue
+        index = _skip_spaces(stripped, len(key))
+        if index >= len(stripped) or stripped[index] != "=":
+            continue
+        index = _skip_spaces(stripped, index + 1)
+        if index >= len(stripped) or stripped[index] != '"':
+            continue
+        value, _next_index = _read_quoted_string(stripped, index)
+        return value
+    return None
+
+
+def _strip_line_comment(line: str) -> str:
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if in_string:
+            if char == '"' and not escaped:
+                in_string = False
+            escaped = char == "\\" and not escaped
+            if char != "\\":
+                escaped = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            escaped = False
+            index += 1
+            continue
+        if line.startswith("--", index) or line.startswith("#", index):
+            return line[:index]
+        index += 1
+    return line
+
+
+def _read_word(text: str, start: int) -> tuple[str, int]:
+    index = start
+    while index < len(text) and (text[index].isalpha() or text[index] == "_"):
+        index += 1
+    return text[start:index], index
+
+
+def _read_dependency_name(text: str, start: int) -> tuple[str, int]:
+    index = start
+    while index < len(text) and not text[index].isspace():
+        if text[index] in {'"', "@"}:
+            break
+        index += 1
+    return text[start:index], index
+
+
+def _read_quoted_string(text: str, start: int) -> tuple[str | None, int]:
+    if start >= len(text) or text[start] != '"':
+        return None, start
+    chars: list[str] = []
+    escaped = False
+    index = start + 1
+    while index < len(text):
+        char = text[index]
+        if escaped:
+            chars.append(char)
+            escaped = False
+            index += 1
+            continue
+        if char == "\\":
+            escaped = True
+            index += 1
+            continue
+        if char == '"':
+            return "".join(chars), index + 1
+        chars.append(char)
+        index += 1
+    return None, start
+
+
+def _skip_spaces(text: str, start: int) -> int:
+    index = start
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
 
 
 def _dedupe_dependencies(dependencies: list[LakeDependency]) -> list[LakeDependency]:

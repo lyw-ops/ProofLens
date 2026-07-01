@@ -199,14 +199,33 @@ def _collect_docstring(lines: list[str], start: int) -> tuple[str, int]:
             break
         line_index += 1
     raw = "\n".join(collected)
-    raw = re.sub(r"^\s*/--\s?", "", raw)
-    raw = re.sub(r"\s?-/\s*$", "", raw)
+    raw = _strip_docstring_markers(raw)
     cleaned = "\n".join(_clean_doc_line(line) for line in raw.splitlines()).strip()
     return cleaned or None, line_index + 1
 
 
+def _strip_docstring_markers(raw: str) -> str:
+    text = raw.lstrip()
+    if text.startswith("/--"):
+        text = text[3:]
+        if text.startswith(" "):
+            text = text[1:]
+    text = text.rstrip()
+    if text.endswith("-/"):
+        text = text[:-2]
+        if text.endswith(" "):
+            text = text[:-1]
+    return text
+
+
 def _clean_doc_line(line: str) -> str:
-    return re.sub(r"^\s*\*\s?", "", line).rstrip()
+    stripped = line.lstrip()
+    if stripped.startswith("*"):
+        stripped = stripped[1:]
+        if stripped.startswith(" "):
+            stripped = stripped[1:]
+        return stripped.rstrip()
+    return line.rstrip()
 
 
 def _block_comment_depth_after_line(line: str, depth: int) -> int:
@@ -300,7 +319,7 @@ def extract_statement(source: str) -> str:
             if before_body:
                 statement_lines.append(before_body)
             break
-        if re.match(r"^\s*(by|where)\b", line_without_comment):
+        if _starts_with_keyword(line_without_comment, {"by", "where"}):
             break
         statement_lines.append(line_without_comment.rstrip())
         if _statement_seems_complete(statement_lines):
@@ -441,8 +460,7 @@ def _is_proof_terminator(line: str) -> bool:
 
 
 def _tactic_head(step_text: str) -> str:
-    match = re.match(r"([A-Za-z_][A-Za-z0-9_'.]*)", step_text)
-    return match.group(1) if match else ""
+    return _read_identifier(step_text, 0) or ""
 
 
 def _first_nonspace_column(line: str) -> int:
@@ -506,8 +524,48 @@ def _relative_path(path: Path, root: Path) -> str:
 
 
 def tokenize_lean_source(source: str) -> set[str]:
-    tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_'.]*", _strip_comments_and_strings(source)))
+    tokens = _identifier_tokens(_strip_comments_and_strings(source))
     return {token for token in tokens if token not in KEYWORDS}
+
+
+def _identifier_tokens(text: str) -> set[str]:
+    tokens: set[str] = set()
+    index = 0
+    while index < len(text):
+        token = _read_identifier(text, index)
+        if token:
+            tokens.add(token)
+            index += len(token)
+            continue
+        index += 1
+    return tokens
+
+
+def _read_identifier(text: str, start: int) -> str | None:
+    if start >= len(text) or not _is_identifier_start(text[start]):
+        return None
+    index = start + 1
+    while index < len(text) and _is_identifier_char(text[index]):
+        index += 1
+    return text[start:index]
+
+
+def _is_identifier_start(char: str) -> bool:
+    return char.isalpha() or char == "_"
+
+
+def _is_identifier_char(char: str) -> bool:
+    return char.isalnum() or char in {"_", "'", "."}
+
+
+def _starts_with_keyword(text: str, keywords: set[str]) -> bool:
+    stripped = text.lstrip()
+    for keyword in keywords:
+        if stripped == keyword:
+            return True
+        if stripped.startswith(keyword) and len(stripped) > len(keyword):
+            return not _is_identifier_char(stripped[len(keyword)])
+    return False
 
 
 def _strip_comments_and_strings(source: str) -> str:

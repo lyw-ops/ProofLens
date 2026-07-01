@@ -58,13 +58,15 @@ jobs:
 
           end Demo
           EOF
-          PYTHONPATH="$GITHUB_WORKSPACE/src" python -m prooflens scan . --semantic --proof-states --format json --out scan.json
+          PYTHONPATH="$GITHUB_WORKSPACE/src" python -m prooflens scan . --ast-declarations --semantic --proof-states --format json --out scan.json
           python - <<'PY'
           import json
           from pathlib import Path
 
           payload = json.loads(Path("scan.json").read_text())
           decl = payload["declarations"][0]
+          assert payload["declaration_extraction"]["status"] == "ok", payload["declaration_extraction"]
+          assert payload["declaration_extraction"]["records"], payload["declaration_extraction"]
           assert decl["semantic_type"] == "forall (n : Nat), n = n", decl
           assert payload["proof_states"]["extraction_mode"] == "lean_structured_json", payload["proof_states"]
           assert len(payload["proof_states"]["records"]) == 1, payload["proof_states"]

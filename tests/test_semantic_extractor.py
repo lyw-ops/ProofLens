@@ -5,6 +5,7 @@ import unittest
 
 from lean_agent.benchmark import build_benchmark_items
 from lean_agent.project import scan_project
+from lean_agent.semantic_extractor import _parse_declarations
 
 
 class SemanticExtractorTests(unittest.TestCase):
@@ -60,6 +61,17 @@ class SemanticExtractorTests(unittest.TestCase):
         self.assertEqual(analysis.semantic.status, "skipped")
         self.assertIn("No lakefile", analysis.semantic.message)
 
+    def test_semantic_json_marker_handles_tabs_and_newlines(self) -> None:
+        declarations = _parse_declarations(
+            'PROOFLENS_DECL_JSON {"kind":"theorem","name":"Demo.final",'
+            '"type":"forall (n : Nat),\\n\\tn = n","dependencies":["Demo.ok"]}\n'
+        )
+
+        self.assertEqual(len(declarations), 1)
+        self.assertEqual(declarations[0].name, "Demo.final")
+        self.assertEqual(declarations[0].type, "forall (n : Nat),\n\tn = n")
+        self.assertEqual(declarations[0].dependencies, ["Demo.ok"])
+
 
 def _write_project(root: Path) -> None:
     (root / "Main.lean").write_text(
@@ -88,8 +100,8 @@ def _write_fake_lake(bin_dir: Path) -> None:
     lake.write_text(
         """#!/bin/sh
 if [ "$1" = "env" ] && [ "$2" = "lean" ]; then
-  echo "PROOFLENS_DECL	theorem	Demo.ok	forall (n : Nat), n = n	"
-  echo "PROOFLENS_DECL	theorem	Demo.final	forall (n : Nat), n = n	Demo.ok"
+  printf '%s\n' 'PROOFLENS_DECL_JSON {"kind":"theorem","name":"Demo.ok","type":"forall (n : Nat), n = n","dependencies":[]}'
+  printf '%s\n' 'PROOFLENS_DECL_JSON {"kind":"theorem","name":"Demo.final","type":"forall (n : Nat), n = n","dependencies":["Demo.ok"]}'
   exit 0
 fi
 if [ "$1" = "build" ]; then

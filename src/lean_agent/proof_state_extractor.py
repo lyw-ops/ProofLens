@@ -10,6 +10,7 @@ from pathlib import Path
 from lean_agent.models import (
     LeanDeclaration,
     LeanFileAnalysis,
+    ProofStep,
     ProofStateExtractionReport,
     ProofStateRecord,
 )
@@ -137,7 +138,7 @@ def extract_proof_states(
         {
             declaration.file
             for declaration in declarations
-            if declaration.proof_steps
+            if _can_have_tactic_state(declaration)
         }
     )
     command = _structured_command_template(root_path)
@@ -161,6 +162,9 @@ def extract_proof_states(
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
     modes: set[str] = set()
+    had_partial_records = False
+    partial_exit_code: int | None = None
+    partial_message: str | None = None
     with tempfile.TemporaryDirectory(prefix="prooflens-proof-state-") as temp_dir:
         extractor_path = Path(temp_dir) / "ProofLensProofStateExtractor.lean"
         extractor_path.write_text(LEAN_PROOF_STATE_EXTRACTOR, encoding="utf-8")
@@ -185,10 +189,18 @@ def extract_proof_states(
                 structured_result.stdout + "\n" + structured_result.stderr,
                 file,
             )
-            if structured_result.returncode == 0 and saw_structured_marker:
+            if structured_records:
                 records.extend(structured_records)
                 modes.add(STRUCTURED_MODE)
+            if structured_result.returncode == 0 and saw_structured_marker:
                 continue
+            if structured_result.returncode != 0 and structured_records:
+                had_partial_records = True
+                partial_exit_code = structured_result.returncode
+                partial_message = _partial_message(
+                    structured_result.stderr,
+                    structured_result.stdout,
+                )
 
             trace_command = _trace_command_for_file(root_path, file)
             try:
@@ -206,7 +218,25 @@ def extract_proof_states(
                 )
             stdout_parts.append(trace_result.stdout)
             stderr_parts.append(trace_result.stderr)
+            trace_records = _parse_lean_output(trace_result.stdout + "\n" + trace_result.stderr, file)
             if trace_result.returncode != 0:
+                if trace_records:
+                    records.extend(trace_records)
+                    modes.add(TRACE_MODE)
+                    had_partial_records = True
+                deduped_records = _dedupe_records(records)
+                if deduped_records:
+                    return ProofStateExtractionReport(
+                        status="partial",
+                        command=trace_command,
+                        files=tactic_files,
+                        records=deduped_records,
+                        extraction_mode=_mode_summary(modes),
+                        exit_code=trace_result.returncode,
+                        stdout="\n".join(stdout_parts),
+                        stderr="\n".join(stderr_parts),
+                        message=_partial_message(trace_result.stderr, trace_result.stdout),
+                    )
                 return ProofStateExtractionReport(
                     status="failed",
                     command=trace_command,
@@ -218,19 +248,22 @@ def extract_proof_states(
                     stderr="\n".join(stderr_parts),
                     message=_first_output_line(trace_result.stderr, trace_result.stdout),
                 )
-            records.extend(_parse_lean_output(trace_result.stdout + "\n" + trace_result.stderr, file))
-            modes.add(TRACE_MODE)
+            if trace_records:
+                records.extend(trace_records)
+                modes.add(TRACE_MODE)
 
     mode = _mode_summary(modes)
+    status = "partial" if had_partial_records else "ok"
     return ProofStateExtractionReport(
-        status="ok",
+        status=status,
         command=_command_template_for_mode(root_path, mode),
         files=tactic_files,
-        records=records,
+        records=_dedupe_records(records),
         extraction_mode=mode,
-        exit_code=0,
+        exit_code=partial_exit_code if had_partial_records else 0,
         stdout="\n".join(stdout_parts),
         stderr="\n".join(stderr_parts),
+        message=partial_message if had_partial_records else None,
     )
 
 
@@ -238,6 +271,8 @@ def attach_proof_states(
     declarations: list[LeanDeclaration],
     report: ProofStateExtractionReport,
 ) -> None:
+    if report.extraction_mode in {STRUCTURED_MODE, "mixed"}:
+        _merge_structured_proof_steps(declarations, report.records)
     records_by_location: dict[tuple[str, int, int], ProofStateRecord] = {}
     for record in report.records:
         records_by_location[(record.file, record.line, record.column)] = record
@@ -249,6 +284,119 @@ def attach_proof_states(
             step.before_state = record.before_state
             step.after_state = record.after_state
             step.end_line = record.end_line
+
+
+def _can_have_tactic_state(declaration: LeanDeclaration) -> bool:
+    return declaration.kind in {"theorem", "lemma", "example"} or bool(declaration.proof_steps)
+
+
+def _merge_structured_proof_steps(
+    declarations: list[LeanDeclaration],
+    records: list[ProofStateRecord],
+) -> None:
+    declarations_by_file: dict[str, list[LeanDeclaration]] = {}
+    for declaration in declarations:
+        if _can_have_tactic_state(declaration):
+            declarations_by_file.setdefault(declaration.file, []).append(declaration)
+    for file_declarations in declarations_by_file.values():
+        file_declarations.sort(key=lambda item: (item.line, item.column, item.end_line, item.end_column))
+
+    records_by_declaration: dict[int, list[ProofStateRecord]] = {}
+    for record in records:
+        declaration = _declaration_for_record(declarations_by_file.get(record.file, []), record)
+        if declaration is None:
+            continue
+        records_by_declaration.setdefault(id(declaration), []).append(record)
+
+    for declaration in declarations:
+        declaration_records = records_by_declaration.get(id(declaration))
+        if not declaration_records:
+            continue
+        declaration_records = sorted(
+            _dedupe_records(declaration_records),
+            key=lambda item: (item.line, item.column, item.end_line, item.end_column, item.tactic_syntax),
+        )
+        existing_by_location = {
+            (step.line, step.column): step
+            for step in declaration.proof_steps
+        }
+        merged: list[ProofStep] = []
+        used_locations: set[tuple[int, int]] = set()
+        for record in declaration_records:
+            location = (record.line, record.column)
+            step = existing_by_location.get(location)
+            if step is None:
+                step = _proof_step_from_record(record, len(merged) + 1)
+            else:
+                step.text = record.tactic_syntax
+                step.tactic = _tactic_head(record.tactic_syntax)
+                step.end_line = record.end_line
+            step.before_state = record.before_state
+            step.after_state = record.after_state
+            used_locations.add(location)
+            merged.append(step)
+        for step in declaration.proof_steps:
+            if (step.line, step.column) not in used_locations:
+                merged.append(step)
+        merged.sort(key=lambda item: (item.line, item.column, item.index))
+        for index, step in enumerate(merged, start=1):
+            step.index = index
+        declaration.proof_steps = merged
+
+
+def _declaration_for_record(
+    declarations: list[LeanDeclaration],
+    record: ProofStateRecord,
+) -> LeanDeclaration | None:
+    candidates = [
+        declaration
+        for declaration in declarations
+        if _record_inside_declaration(record, declaration)
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda declaration: (
+            declaration.end_line - declaration.line,
+            declaration.end_column - declaration.column,
+        ),
+    )
+
+
+def _record_inside_declaration(record: ProofStateRecord, declaration: LeanDeclaration) -> bool:
+    start = (declaration.line, declaration.column)
+    end = (declaration.end_line, declaration.end_column)
+    record_start = (record.line, record.column)
+    return start <= record_start <= end
+
+
+def _proof_step_from_record(record: ProofStateRecord, index: int) -> ProofStep:
+    return ProofStep(
+        index=index,
+        tactic=_tactic_head(record.tactic_syntax),
+        text=record.tactic_syntax,
+        line=record.line,
+        column=record.column,
+        end_line=record.end_line,
+        before_state=record.before_state,
+        after_state=record.after_state,
+    )
+
+
+def _tactic_head(tactic_syntax: str) -> str:
+    stripped = tactic_syntax.strip()
+    head = _read_identifier(stripped)
+    return head or stripped.split(maxsplit=1)[0]
+
+
+def _read_identifier(text: str) -> str | None:
+    if not text or not (text[0].isalpha() or text[0] == "_"):
+        return None
+    index = 1
+    while index < len(text) and (text[index].isalnum() or text[index] in {"_", "'", "."}):
+        index += 1
+    return text[:index]
 
 
 def _structured_command_template(root: Path) -> list[str]:
@@ -542,3 +690,10 @@ def _first_output_line(primary: str, fallback: str = "") -> str | None:
     if not text:
         return None
     return text.splitlines()[0]
+
+
+def _partial_message(primary: str, fallback: str = "") -> str:
+    line = _first_output_line(primary, fallback)
+    if line:
+        return f"Lean returned non-zero during proof-state extraction; preserved partial records. First diagnostic: {line}"
+    return "Lean returned non-zero during proof-state extraction; preserved partial records."

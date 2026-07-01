@@ -82,6 +82,67 @@ end Demo
         self.assertEqual(report.statements_checked, 1)
         messages = [finding.message for finding in report.findings]
         self.assertTrue(any("does not match" in message for message in messages))
+        self.assertEqual(
+            report.findings[0].patch,
+            r"\leanstatement{Demo.ok}{forall (n : Nat), n = n}",
+        )
+        self.assertEqual(report.patches_suggested, 1)
+        self.assertEqual(report.patches_applied, 0)
+
+    def test_check_paper_does_not_modify_file_without_permission(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+theorem ok (n : Nat) : n = n := by
+  rfl
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            original = r"The formal statement is \leanstatement{Demo.ok}{forall (n : Nat), n = 0}."
+            paper.write_text(original, encoding="utf-8")
+            analysis = scan_project(root)
+            analysis.declaration_map["Demo.ok"].semantic_type = "forall (n : Nat), n = n"
+            report = check_paper(analysis, paper)
+            current = paper.read_text(encoding="utf-8")
+
+        self.assertEqual(current, original)
+        self.assertEqual(report.patches_suggested, 1)
+        self.assertEqual(report.patches_applied, 0)
+
+    def test_check_paper_applies_statement_patch_with_permission(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+theorem ok (n : Nat) : n = n := by
+  rfl
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            paper.write_text(
+                r"The formal statement is \leanstatement{Demo.ok}{forall (n : Nat), n = 0}.",
+                encoding="utf-8",
+            )
+            analysis = scan_project(root)
+            analysis.declaration_map["Demo.ok"].semantic_type = "forall (n : Nat), n = n"
+            report = check_paper(analysis, paper, apply_patches=True)
+
+            patched = paper.read_text(encoding="utf-8")
+
+        self.assertIn(r"\leanstatement{Demo.ok}{forall (n : Nat), n = n}", patched)
+        self.assertEqual(report.findings, [])
+        self.assertEqual(report.patches_suggested, 1)
+        self.assertEqual(report.patches_applied, 1)
+        self.assertEqual(report.applied_patches[0].kind, "replace_leanstatement")
 
     def test_reports_stale_lean_code_block_statement(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -192,6 +253,58 @@ We cite \leantheorem{Main theorem}.
         self.assertEqual(report.statements_checked, 1)
         self.assertEqual(report.findings, [])
 
+    def test_resolves_aliases_from_included_tex_files(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+theorem ok : True := by
+  trivial
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "aliases.tex").write_text(
+                r"\leantheoremalias{Main theorem}{Demo.ok}",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            paper.write_text(
+                r"\input{aliases} We cite \leantheorem{Main theorem}.",
+                encoding="utf-8",
+            )
+            analysis = scan_project(root)
+            report = check_paper(analysis, paper)
+
+        self.assertEqual(report.references_checked, 1)
+        self.assertEqual(report.findings, [])
+
+    def test_nested_latex_macro_reference_resolves_to_lean_name(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+theorem ok : True := by
+  trivial
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            paper.write_text(
+                r"We cite \leantheorem{\texttt{Demo.ok}}.",
+                encoding="utf-8",
+            )
+            analysis = scan_project(root)
+            report = check_paper(analysis, paper)
+
+        self.assertEqual(report.references_checked, 1)
+        self.assertEqual(report.findings, [])
+
     def test_missing_reference_location_includes_nearest_section(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -210,6 +323,72 @@ We cite \leantheorem{Main theorem}.
         self.assertEqual(report.references_checked, 1)
         self.assertIn("section `Formalization`", report.findings[0].location)
         self.assertIn("\\leanalias", report.findings[0].suggestion)
+
+    def test_missing_reference_location_supports_starred_section(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                "theorem ok : True := by\n  trivial\n",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            paper.write_text(
+                r"\section*{Formalization}\lean{missing}",
+                encoding="utf-8",
+            )
+            analysis = scan_project(root)
+            report = check_paper(analysis, paper)
+
+        self.assertEqual(report.references_checked, 1)
+        self.assertIn("section `Formalization`", report.findings[0].location)
+
+    def test_missing_short_reference_includes_alias_patch_when_candidate_is_unique(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+theorem ok : True := by
+  trivial
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            paper.write_text(r"\lean{Ok}", encoding="utf-8")
+            analysis = scan_project(root)
+            report = check_paper(analysis, paper)
+
+        self.assertEqual(report.references_checked, 1)
+        self.assertEqual(report.findings[0].patch, r"\leanalias{Ok}{Demo.ok}")
+
+    def test_check_paper_inserts_unique_alias_patch_with_permission(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+theorem ok : True := by
+  trivial
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            paper.write_text(
+                "\\documentclass{article}\n\\begin{document}\nWe cite \\lean{Ok}.\n\\end{document}\n",
+                encoding="utf-8",
+            )
+            analysis = scan_project(root)
+            report = check_paper(analysis, paper, apply_patches=True)
+            patched = paper.read_text(encoding="utf-8")
+
+        self.assertIn(r"\leanalias{Ok}{Demo.ok}", patched)
+        self.assertLess(patched.index(r"\leanalias{Ok}{Demo.ok}"), patched.index(r"\begin{document}"))
+        self.assertEqual(report.findings, [])
+        self.assertEqual(report.patches_applied, 1)
 
 
 if __name__ == "__main__":

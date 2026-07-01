@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prooflens.local/schemas/benchmark_schema_v1.json",
+  "title": "Prooflens AI4Math Benchmark Item v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "schema_stability",
+    "missing_value",
+    "field_status",
+    "id",
+    "name",
+    "kind",
+    "file",
+    "line",
+    "column",
+    "natural_language_description",
+    "lean_statement",
+    "dependencies",
+    "verification",
+    "difficulty"
+  ],
+  "properties": {
+    "schema_version": { "const": "prooflens.ai4math.v1" },
+    "schema_stability": { "enum": ["stable", "deprecated"] },
+    "missing_value": { "type": "null" },
+    "field_status": {
+      "type": "object",
+      "additionalProperties": { "enum": ["available", "missing", "error"] }
+    },
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "file": { "type": "string", "minLength": 1 },
+    "line": { "type": "integer", "minimum": 1 },
+    "column": { "type": "integer", "minimum": 1 },
+    "end_line": { "type": "integer", "minimum": 1 },
+    "end_column": { "type": "integer", "minimum": 1 },
+    "natural_language_description": { "type": "string" },
+    "lean_statement": { "type": "string" },
+    "conclusion": { "type": ["string", "null"] },
+    "dependencies": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["type", "command", "note"],
+      "properties": {
+        "type": { "type": "string" },
+        "command": { "type": "string" },
+        "note": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "difficulty": { "enum": ["easy", "medium", "hard"] }
+  },
+  "oneOf": [
+    {
+      "title": "Declaration item",
+      "required": [
+        "canonical_name",
+        "semantic_kind",
+        "end_line",
+        "end_column",
+        "formal_parameters",
+        "assumptions",
+        "static_dependencies",
+        "semantic_dependencies",
+        "proof_steps",
+        "dependency_files"
+      ],
+      "properties": {
+        "kind": {
+          "enum": ["theorem", "lemma", "def", "abbrev", "structure", "class", "inductive"]
+        },
+        "canonical_name": { "type": "string" },
+        "semantic_kind": { "type": ["string", "null"] },
+        "formal_parameters": { "type": "array" },
+        "assumptions": { "type": "array" },
+        "static_dependencies": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "semantic_dependencies": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "proof_steps": { "type": "array" },
+        "dependency_files": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    {
+      "title": "Tactic item",
+      "required": [
+        "parent_name",
+        "parent_canonical_name",
+        "parent_kind",
+        "tactic",
+        "tactic_text",
+        "before_state",
+        "after_state"
+      ],
+      "properties": {
+        "kind": { "const": "tactic" },
+        "parent_name": { "type": "string" },
+        "parent_canonical_name": { "type": "string" },
+        "parent_kind": { "type": "string" },
+        "tactic": { "type": "string" },
+        "tactic_text": { "type": "string" },
+        "before_state": { "type": ["string", "null"] },
+        "after_state": { "type": ["string", "null"] }
+      }
+    }
+  ],
+  "additionalProperties": true
+}

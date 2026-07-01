@@ -142,7 +142,7 @@ end Demo
             lake.write_text(
                 """#!/bin/sh
 if [ "$1" = "env" ] && [ "$2" = "lean" ]; then
-  echo "PROOFLENS_DECL	theorem	Demo.ok	forall (n : Nat), n = n	"
+  printf '%s\n' 'PROOFLENS_DECL_JSON {"kind":"theorem","name":"Demo.ok","type":"forall (n : Nat), n = n","dependencies":[]}'
   exit 0
 fi
 if [ "$1" = "--version" ]; then
@@ -180,6 +180,47 @@ exit 2
         payload = json.loads(result.stdout)
         self.assertEqual(payload["statements_checked"], 1)
         self.assertEqual(payload["findings"], [])
+
+    def test_check_paper_apply_patches_updates_paper_when_requested(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Main.lean").write_text(
+                """
+namespace Demo
+theorem ok (n : Nat) : n = n := by
+  rfl
+end Demo
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            paper = root / "paper.tex"
+            paper.write_text(r"\leanconclusion{Demo.ok}{n = 0}", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "prooflens",
+                    "check-paper",
+                    "--lean-root",
+                    str(root),
+                    "--paper",
+                    str(paper),
+                    "--apply-patches",
+                    "--format",
+                    "json",
+                ],
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+            patched = paper.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["patches_applied"], 1)
+        self.assertEqual(payload["findings"], [])
+        self.assertEqual(patched, r"\leanconclusion{Demo.ok}{n = n}")
 
     def test_env_command_does_not_require_lean_files(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -3,7 +3,9 @@ from tempfile import TemporaryDirectory
 import os
 import unittest
 
+from lean_agent.models import LeanDeclaration, ProofStateExtractionReport, ProofStateRecord
 from lean_agent.project import scan_project
+from lean_agent.proof_state_extractor import attach_proof_states
 
 
 class ProofStateExtractorTests(unittest.TestCase):
@@ -43,6 +45,29 @@ class ProofStateExtractorTests(unittest.TestCase):
         self.assertEqual(step.before_state, "n : Nat\n|- n = n")
         self.assertEqual(step.after_state, "no goals")
 
+    def test_partial_structured_records_are_kept_when_fallback_fails(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_project(root)
+            bin_dir = root / "bin"
+            _write_fake_lake(
+                bin_dir,
+                structured=True,
+                structured_exit=1,
+                trace=False,
+                trace_exit=2,
+            )
+            with _path_prepend(bin_dir):
+                analysis = scan_project(root, proof_states=True, proof_state_timeout=5)
+
+        self.assertIsNotNone(analysis.proof_states)
+        self.assertEqual(analysis.proof_states.status, "partial")
+        self.assertEqual(analysis.proof_states.extraction_mode, "lean_structured_json")
+        self.assertEqual(len(analysis.proof_states.records), 1)
+        step = analysis.declaration_map["Demo.final"].proof_steps[0]
+        self.assertEqual(step.before_state, "n : Nat\n|- n = n")
+        self.assertEqual(step.after_state, "no goals")
+
     def test_non_tactic_projects_skip_proof_state_extraction(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -52,6 +77,47 @@ class ProofStateExtractorTests(unittest.TestCase):
 
         self.assertIsNotNone(analysis.proof_states)
         self.assertEqual(analysis.proof_states.status, "skipped")
+
+    def test_structured_records_can_create_missing_proof_steps(self) -> None:
+        declaration = LeanDeclaration(
+            kind="theorem",
+            name="Demo.ok",
+            short_name="ok",
+            file="Main.lean",
+            line=1,
+            column=1,
+            end_line=3,
+            end_column=1,
+            statement="theorem ok : True",
+        )
+        report = ProofStateExtractionReport(
+            status="ok",
+            command=["lean", "--run", "<prooflens-extractor>", "<root>", "<file>"],
+            files=["Main.lean"],
+            extraction_mode="lean_structured_json",
+            records=[
+                ProofStateRecord(
+                    file="Main.lean",
+                    line=2,
+                    column=3,
+                    end_line=2,
+                    end_column=10,
+                    tactic_syntax="trivial",
+                    before_state="|- True",
+                    after_state="no goals",
+                )
+            ],
+        )
+
+        attach_proof_states([declaration], report)
+
+        self.assertEqual(len(declaration.proof_steps), 1)
+        step = declaration.proof_steps[0]
+        self.assertEqual(step.index, 1)
+        self.assertEqual(step.tactic, "trivial")
+        self.assertEqual(step.text, "trivial")
+        self.assertEqual(step.before_state, "|- True")
+        self.assertEqual(step.after_state, "no goals")
 
 
 def _write_project(root: Path) -> None:
@@ -70,15 +136,29 @@ end Demo
     (root / "lakefile.lean").write_text("import Lake\n", encoding="utf-8")
 
 
-def _write_fake_lake(bin_dir: Path, structured: bool) -> None:
+def _write_fake_lake(
+    bin_dir: Path,
+    structured: bool,
+    structured_exit: int = 0,
+    trace: bool = True,
+    trace_exit: int = 0,
+) -> None:
     bin_dir.mkdir()
     lake = bin_dir / "lake"
     structured_block = ""
     if structured:
-        structured_block = """
+        structured_block = f"""
 if sys.argv[1:4] == ["env", "lean", "--run"]:
-    print('PROOFLENS_PROOF_STATE\\t{"line":4,"column":3,"end_line":4,"end_column":6,"tactic_syntax":"rfl","before_state":"n : Nat\\\\n|- n = n","after_state":"no goals"}')
-    sys.exit(0)
+    print('PROOFLENS_PROOF_STATE\\t{{"line":4,"column":3,"end_line":4,"end_column":6,"tactic_syntax":"rfl","before_state":"n : Nat\\\\n|- n = n","after_state":"no goals"}}')
+    sys.exit({structured_exit})
+"""
+    trace_block = f"""
+if sys.argv[1:3] == ["env", "lean"] and "-Dtrace.Elab.info=true" in sys.argv:
+    print(trace)
+    sys.exit({trace_exit})
+""" if trace else f"""
+if sys.argv[1:3] == ["env", "lean"] and "-Dtrace.Elab.info=true" in sys.argv:
+    sys.exit({trace_exit})
 """
     lake.write_text(
         f"""#!/usr/bin/env python3
@@ -97,9 +177,7 @@ trace = '''[Elab.info]
 '''
 
 {structured_block}
-if sys.argv[1:3] == ["env", "lean"] and "-Dtrace.Elab.info=true" in sys.argv:
-    print(trace)
-    sys.exit(0)
+{trace_block}
 sys.exit(2)
 """,
         encoding="utf-8",

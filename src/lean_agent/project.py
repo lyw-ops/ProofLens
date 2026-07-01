@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from lean_agent.ast_declaration_extractor import apply_ast_declarations, extract_ast_declarations
 from lean_agent.declaration_index import DeclarationIndex
 from lean_agent.lean_parser import parse_lean_file, tokenize_lean_source
 from lean_agent.models import LeanDeclaration, LeanFileAnalysis, ProjectAnalysis
@@ -55,6 +56,8 @@ def _is_ignored_path(path: Path, root: Path) -> bool:
 
 def scan_project(
     root: str | Path,
+    ast_declarations: bool | None = None,
+    ast_declaration_timeout: int = 120,
     semantic: bool = False,
     semantic_build: bool = False,
     semantic_timeout: int = 120,
@@ -68,6 +71,15 @@ def scan_project(
         parse_lean_file(path, scan_root)
         for path in lean_files
     ]
+    declaration_extraction = None
+    use_ast_declarations = _has_lakefile(scan_root) if ast_declarations is None else ast_declarations
+    if use_ast_declarations:
+        declaration_extraction = extract_ast_declarations(
+            scan_root,
+            file_analyses,
+            timeout=ast_declaration_timeout,
+        )
+        apply_ast_declarations(file_analyses, declaration_extraction)
     declarations = [
         declaration
         for file_analysis in file_analyses
@@ -78,6 +90,7 @@ def scan_project(
         root=str(scan_root),
         files=file_analyses,
         declarations=declarations,
+        declaration_extraction=declaration_extraction,
     )
     if semantic:
         analysis.semantic = extract_semantics(
@@ -111,6 +124,10 @@ def _attach_dependencies(declarations: list[LeanDeclaration]) -> None:
         declaration.dependencies = sorted(dependencies)
 
 
+def _has_lakefile(root: Path) -> bool:
+    return (root / "lakefile.lean").exists() or (root / "lakefile.toml").exists()
+
+
 def project_to_markdown(analysis: ProjectAnalysis) -> str:
     lines: list[str] = []
     lines.append(f"# Lean Project Analysis")
@@ -119,8 +136,14 @@ def project_to_markdown(analysis: ProjectAnalysis) -> str:
     lines.append(f"- Lean files: {len(analysis.files)}")
     lines.append(f"- Declarations: {len(analysis.declarations)}")
     if analysis.semantic:
+        if analysis.declaration_extraction:
+            lines.append(f"- Declaration extraction: {analysis.declaration_extraction.status}")
+            lines.append(f"- AST declaration records: {len(analysis.declaration_extraction.records)}")
         lines.append(f"- Semantic extraction: {analysis.semantic.status}")
         lines.append(f"- Semantic declarations: {len(analysis.semantic.declarations)}")
+    elif analysis.declaration_extraction:
+        lines.append(f"- Declaration extraction: {analysis.declaration_extraction.status}")
+        lines.append(f"- AST declaration records: {len(analysis.declaration_extraction.records)}")
     if analysis.proof_states:
         lines.append(f"- Proof-state extraction: {analysis.proof_states.status}")
         lines.append(f"- Proof-state records: {len(analysis.proof_states.records)}")

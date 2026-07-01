@@ -9,7 +9,7 @@ from lean_agent.models import LeanDeclaration, ProjectAnalysis
 
 BENCHMARK_KINDS = {"theorem", "lemma", "def", "abbrev", "structure", "class", "inductive"}
 BENCHMARK_SCHEMA_VERSION = "prooflens.ai4math.v1"
-BENCHMARK_SCHEMA_STABILITY = "experimental"
+BENCHMARK_SCHEMA_STABILITY = "stable"
 
 
 def build_benchmark_items(

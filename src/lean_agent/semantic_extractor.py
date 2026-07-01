@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 import tempfile
@@ -16,7 +15,8 @@ from lean_agent.models import (
 )
 
 
-MARKER = "PROOFLENS_DECL\t"
+MARKER = "PROOFLENS_DECL_JSON "
+LEGACY_MARKER = "PROOFLENS_DECL\t"
 
 
 def extract_semantics(
@@ -174,23 +174,29 @@ def prooflensValue? (info : ConstantInfo) : Option Expr :=
   | .opaqueInfo value => some value.value
   | _ => none
 
-def prooflensDeps (target : Name) (info : ConstantInfo) : String :=
+def prooflensDeps (target : Name) (info : ConstantInfo) : List String :=
   let depsFromType := prooflensCollectConsts info.type
   let deps :=
     match prooflensValue? info with
     | some value => prooflensCollectConsts value depsFromType
     | none => depsFromType
-  let names :=
-    deps.toList.map Name.toString |>.filter (fun name =>
+  deps.toList.map Name.toString |>.filter (fun name =>
       prooflensTargets.contains name && name != target.toString
     )
-  String.intercalate "," names
+
+def prooflensDeclarationJson (name : Name) (info : ConstantInfo) : Json :=
+  Json.mkObj [
+    ("kind", toJson (prooflensKind info)),
+    ("name", toJson name.toString),
+    ("type", toJson (toString info.type)),
+    ("dependencies", toJson (prooflensDeps name info))
+  ]
 
 #eval show CoreM Unit from do
   let env ← getEnv
   for (name, info) in env.constants.toList do
     if prooflensTargets.contains name.toString then
-      IO.println s!"{MARKER}{{prooflensKind info}}\t{{name}}\t{{info.type}}\t{{prooflensDeps name info}}"
+      IO.println s!"{MARKER}{{(prooflensDeclarationJson name info).compress}}"
 """
 
 
@@ -221,23 +227,64 @@ def _target_names(declarations: list[LeanDeclaration]) -> list[str]:
 def _parse_declarations(stdout: str) -> list[SemanticDeclaration]:
     declarations: list[SemanticDeclaration] = []
     for line in stdout.splitlines():
-        if not line.startswith(MARKER):
-            continue
-        payload = line[len(MARKER):]
-        parts = payload.split("\t", 3)
-        if len(parts) not in {3, 4}:
-            continue
-        kind, name, type_text = parts[:3]
-        dependencies = _parse_dependencies(parts[3]) if len(parts) == 4 else []
-        declarations.append(
-            SemanticDeclaration(
-                name=name,
-                kind=kind,
-                type=type_text,
-                dependencies=dependencies,
-            )
-        )
+        declaration = _parse_declaration_line(line)
+        if declaration is not None:
+            declarations.append(declaration)
     return declarations
+
+
+def _parse_declaration_line(line: str) -> SemanticDeclaration | None:
+    if line.startswith(MARKER):
+        return _parse_json_declaration(line[len(MARKER):])
+    if line.startswith(LEGACY_MARKER):
+        return _parse_legacy_declaration(line[len(LEGACY_MARKER):])
+    return None
+
+
+def _parse_json_declaration(payload: str) -> SemanticDeclaration | None:
+    try:
+        raw = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    kind = raw.get("kind")
+    name = raw.get("name")
+    type_text = raw.get("type")
+    if not all(isinstance(item, str) and item for item in (kind, name, type_text)):
+        return None
+    return SemanticDeclaration(
+        name=name,
+        kind=kind,
+        type=type_text,
+        dependencies=_parse_json_dependencies(raw.get("dependencies")),
+    )
+
+
+def _parse_json_dependencies(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return sorted(
+        {
+            _normalize_name(item.strip())
+            for item in value
+            if isinstance(item, str) and item.strip()
+        }
+    )
+
+
+def _parse_legacy_declaration(payload: str) -> SemanticDeclaration | None:
+    parts = payload.split("\t", 3)
+    if len(parts) not in {3, 4}:
+        return None
+    kind, name, type_text = parts[:3]
+    dependencies = _parse_dependencies(parts[3]) if len(parts) == 4 else []
+    return SemanticDeclaration(
+        name=name,
+        kind=kind,
+        type=type_text,
+        dependencies=dependencies,
+    )
 
 
 def _parse_dependencies(text: str) -> list[str]:
@@ -259,7 +306,9 @@ def _run(command: list[str], root: Path, timeout: int) -> subprocess.CompletedPr
 
 
 def _valid_module_part(part: str) -> bool:
-    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", part) is not None
+    if not part or not (part[0].isalpha() or part[0] == "_"):
+        return False
+    return all(char.isalnum() or char in {"_", "'"} for char in part[1:])
 
 
 def _lean_string(value: str) -> str:

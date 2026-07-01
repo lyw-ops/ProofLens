@@ -35,6 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("path", help="Lean project root or a .lean file")
     scan.add_argument("--format", choices=("markdown", "json"), default="markdown")
     scan.add_argument("--include-source", action="store_true", help="Include full source blocks in JSON output.")
+    scan.add_argument(
+        "--ast-declarations",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use Lean AST extraction to refine declarations; defaults to on for Lake projects.",
+    )
+    scan.add_argument("--ast-declaration-timeout", type=int, default=120, help="AST declaration extraction timeout in seconds.")
     scan.add_argument("--semantic", action="store_true", help="Run the optional Lean/Lake semantic extractor.")
     scan.add_argument("--semantic-build", action="store_true", help="Run `lake build` before semantic extraction.")
     scan.add_argument("--semantic-timeout", type=int, default=120, help="Semantic extraction timeout in seconds.")
@@ -54,9 +61,21 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--lean-root", required=True, help="Lean project root")
     check.add_argument("--paper", required=True, help="LaTeX or Markdown paper path")
     check.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    check.add_argument(
+        "--ast-declarations",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use Lean AST extraction to refine declarations; defaults to on for Lake projects.",
+    )
+    check.add_argument("--ast-declaration-timeout", type=int, default=120, help="AST declaration extraction timeout in seconds.")
     check.add_argument("--semantic", action="store_true", help="Run the optional Lean/Lake semantic extractor.")
     check.add_argument("--semantic-build", action="store_true", help="Run `lake build` before semantic extraction.")
     check.add_argument("--semantic-timeout", type=int, default=120, help="Semantic extraction timeout in seconds.")
+    check.add_argument(
+        "--apply-patches",
+        action="store_true",
+        help="Apply safe paper patch suggestions to the paper file. Without this flag, files are not modified.",
+    )
     check.add_argument("--out", help="Write output to a file instead of stdout.")
     check.set_defaults(func=cmd_check_paper)
 
@@ -65,6 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--format", choices=("jsonl", "json"), default="jsonl")
     benchmark.add_argument("--level", choices=("theorem", "tactic", "all"), default="theorem")
     benchmark.add_argument("--out", required=True, help="Output .jsonl or .json path")
+    benchmark.add_argument(
+        "--ast-declarations",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use Lean AST extraction to refine declarations; defaults to on for Lake projects.",
+    )
+    benchmark.add_argument("--ast-declaration-timeout", type=int, default=120, help="AST declaration extraction timeout in seconds.")
     benchmark.add_argument("--semantic", action="store_true", help="Run the optional Lean/Lake semantic extractor.")
     benchmark.add_argument("--semantic-build", action="store_true", help="Run `lake build` before semantic extraction.")
     benchmark.add_argument("--semantic-timeout", type=int, default=120, help="Semantic extraction timeout in seconds.")
@@ -93,6 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_scan(args: argparse.Namespace) -> int:
     analysis = scan_project(
         args.path,
+        ast_declarations=args.ast_declarations,
+        ast_declaration_timeout=args.ast_declaration_timeout,
         semantic=args.semantic or args.semantic_build,
         semantic_build=args.semantic_build,
         semantic_timeout=args.semantic_timeout,
@@ -117,11 +145,13 @@ def cmd_explain(args: argparse.Namespace) -> int:
 def cmd_check_paper(args: argparse.Namespace) -> int:
     analysis = scan_project(
         args.lean_root,
+        ast_declarations=args.ast_declarations,
+        ast_declaration_timeout=args.ast_declaration_timeout,
         semantic=args.semantic or args.semantic_build,
         semantic_build=args.semantic_build,
         semantic_timeout=args.semantic_timeout,
     )
-    report = check_paper(analysis, args.paper)
+    report = check_paper(analysis, args.paper, apply_patches=args.apply_patches)
     output = report_to_json(report) if args.format == "json" else report_to_markdown(report)
     _emit(output, args.out)
     return 0 if report.ok() else 1
@@ -130,6 +160,8 @@ def cmd_check_paper(args: argparse.Namespace) -> int:
 def cmd_benchmark(args: argparse.Namespace) -> int:
     analysis = scan_project(
         args.path,
+        ast_declarations=args.ast_declarations,
+        ast_declaration_timeout=args.ast_declaration_timeout,
         semantic=args.semantic or args.semantic_build,
         semantic_build=args.semantic_build,
         semantic_timeout=args.semantic_timeout,

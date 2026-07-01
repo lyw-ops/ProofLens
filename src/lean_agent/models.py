@@ -71,10 +71,51 @@ class LeanFileAnalysis:
 
 
 @dataclass
+class DeclarationExtractionRecord:
+    file: str
+    kind: str
+    name: str
+    short_name: str
+    line: int
+    column: int
+    end_line: int
+    end_column: int
+    source: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class DeclarationExtractionReport:
+    status: str
+    command: list[str]
+    files: list[str]
+    records: list[DeclarationExtractionRecord] = field(default_factory=list)
+    exit_code: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    message: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "command": self.command,
+            "files": self.files,
+            "records": [record.to_dict() for record in self.records],
+            "exit_code": self.exit_code,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "message": self.message,
+        }
+
+
+@dataclass
 class ProjectAnalysis:
     root: str
     files: list[LeanFileAnalysis]
     declarations: list[LeanDeclaration]
+    declaration_extraction: DeclarationExtractionReport | None = None
     semantic: SemanticExtractionReport | None = None
     proof_states: ProofStateExtractionReport | None = None
 
@@ -130,6 +171,9 @@ class ProjectAnalysis:
             "static_dependency_graph": self.dependency_graph(prefer_semantic=False),
             "transitive_dependency_graph": self.transitive_dependency_graph(),
             "declaration_index": self.declaration_index().to_dict(),
+            "declaration_extraction": (
+                self.declaration_extraction.to_dict() if self.declaration_extraction else None
+            ),
             "semantic": self.semantic.to_dict() if self.semantic else None,
             "proof_states": self.proof_states.to_dict() if self.proof_states else None,
         }
@@ -141,6 +185,7 @@ class Finding:
     message: str
     location: str | None = None
     suggestion: str | None = None
+    patch: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

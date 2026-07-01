@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
+
+
+DECLARATION_MODIFIERS = {"private", "protected", "noncomputable", "unsafe", "partial"}
+DECLARATION_KEYWORDS = {"theorem", "lemma", "def", "abbrev", "example", "axiom", "constant", "opaque"}
 
 
 @dataclass
@@ -81,12 +84,7 @@ def _decompose_forall(text: str) -> FormalType:
 
 def _decompose_declaration_statement(text: str) -> FormalType:
     header = text.split(":=", 1)[0].strip()
-    header = re.sub(
-        r"^\s*(?:private\s+|protected\s+|noncomputable\s+|unsafe\s+|partial\s+)*"
-        r"(?:theorem|lemma|def|abbrev|example|axiom|constant|opaque)\b\s*",
-        "",
-        header,
-    )
+    header = _drop_declaration_prefix(header)
     header = _drop_decl_name(header)
     parameters: list[FormalParameter] = []
     index = 0
@@ -178,11 +176,40 @@ def _drop_decl_name(header: str) -> str:
 
 
 def _starts_with_declaration_keyword(text: str) -> bool:
-    return re.match(
-        r"^\s*(?:private\s+|protected\s+|noncomputable\s+|unsafe\s+|partial\s+)*"
-        r"(?:theorem|lemma|def|abbrev|example|axiom|constant|opaque)\b",
-        text,
-    ) is not None
+    return _declaration_prefix_end(text.strip()) is not None
+
+
+def _drop_declaration_prefix(text: str) -> str:
+    stripped = text.strip()
+    prefix_end = _declaration_prefix_end(stripped)
+    return stripped[prefix_end:].lstrip() if prefix_end is not None else stripped
+
+
+def _declaration_prefix_end(text: str) -> int | None:
+    index = 0
+    while True:
+        word, end = _read_word(text, index)
+        if word not in DECLARATION_MODIFIERS:
+            break
+        index = _skip_spaces(text, end)
+    word, end = _read_word(text, index)
+    if word in DECLARATION_KEYWORDS:
+        return end
+    return None
+
+
+def _read_word(text: str, start: int) -> tuple[str, int]:
+    index = start
+    while index < len(text) and (text[index].isalpha() or text[index] == "_"):
+        index += 1
+    return text[start:index], index
+
+
+def _skip_spaces(text: str, start: int) -> int:
+    index = start
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
 
 
 def _read_balanced(text: str, start: int, close: str) -> tuple[str | None, int]:
@@ -210,7 +237,5 @@ def _binder_name(open_char: str) -> str:
 
 
 def _normalize(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"--.*", "", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    lines = [line.split("--", 1)[0] for line in text.strip().splitlines()]
+    return " ".join(" ".join(lines).split())
